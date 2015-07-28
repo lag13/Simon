@@ -3,11 +3,12 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define RED    1
-#define GREEN  2
-#define YELLOW 3
-#define BLUE   4
-#define ALL    5
+#define NONE_LIT -1
+#define RED      0
+#define GREEN    1
+#define YELLOW   2
+#define BLUE     3
+#define ALL      4
 
 #define RED_COLOR    "\x1b[41m"
 #define GREEN_COLOR  "\x1b[42m"
@@ -21,11 +22,15 @@
 #define INPUT_LEN 128
 
 #define STARTING_SEQ_LEN 4
-int sequence[128];
+#define MAX_SEQ_LEN 16
+#define BITS_PER_SEQ_ITEM 2
+#define MAX_SHIFT 6
+
+#define YOU_WON_CODE 0
 
 // Display the game.
-// which_lit - determines which light is lit when printing the board. 0 Means
-// no lights and 5 means all lights.
+// which_lit - determines which light is lit when printing the board. -1 Means
+// no lights and 4 means all lights.
 void printSimon(char which_lit)
 {
     char *red = "";
@@ -60,7 +65,7 @@ void printSimon(char which_lit)
 // An opening before simon begins
 void do_opening()
 {
-    for(int i = 0; i <= 4; i++)
+    for(int i = -1; i <= 3; i++)
     {
         printSimon(i);
         usleep(DISPLAY_SPEED);
@@ -74,30 +79,45 @@ void do_opening()
     }
 }
 
+void add_move_seq_item(uint8_t *move_sequence, uint8_t virt_idx, uint8_t value)
+{
+    uint8_t idx = virt_idx / 4;
+    uint8_t seq_item_idx = virt_idx % 4;
+    move_sequence[idx] = move_sequence[idx] | (value << (MAX_SHIFT - seq_item_idx));
+}
+
+uint8_t get_move_seq_item(uint8_t *move_sequence, uint8_t virt_idx)
+{
+    uint8_t idx = virt_idx / 4;
+    uint8_t seq_item_idx = virt_idx % 4;
+    // Note: 192 is the number when the high 2 bits are both 1
+    return (move_sequence[idx] & (192 >> seq_item_idx)) >> (MAX_SHIFT - seq_item_idx);
+}
+
 // Displays the sequence of moves
-void display_sequence(int *sequence, int seq_len)
+void display_sequence(uint8_t *move_sequence, int seq_len)
 {
     for(int i = 0; i < seq_len; i++)
     {
-        printSimon(sequence[i]);
+        printSimon(get_move_seq_item(move_sequence, i));
         usleep(DISPLAY_SPEED);
-        printSimon(0);
+        printSimon(NONE_LIT);
         usleep(200000);
     }
 }
 
 // Generates the sequence of moves
-void generate_sequence(int *sequence, int seq_len, int start_idx)
+void generate_sequence(uint8_t *move_sequence, int seq_len, int start_idx)
 {
     for(int i = start_idx; i < seq_len; i++)
     {
-        sequence[i] = rand() % 4 + 1;
+        add_move_seq_item(move_sequence, i, rand() % 4);
     }
 }
 
 // Play the game with the user
 // Return 0 if user lost and 1 otherwise
-int handle_input(char *input_buffer, int seq_len)
+int handle_input(uint8_t *move_sequence, char *input_buffer, int seq_len)
 {
     int input;
     int i = 0;
@@ -106,11 +126,13 @@ int handle_input(char *input_buffer, int seq_len)
         fgets(input_buffer, INPUT_LEN, stdin);
         if(sscanf(input_buffer, "%d", &input) && 1 <= input && input <= 4)
         {
-            if(input == sequence[i])
+            // Adjust input to match how the data is stored
+            input--;
+            if(input == get_move_seq_item(move_sequence, i))
             {
                 printSimon(input);
                 usleep(REDRAW_ON_INPUT_SPEED);
-                printSimon(0);
+                printSimon(NONE_LIT);
                 i++;
             }
             else
@@ -124,16 +146,21 @@ int handle_input(char *input_buffer, int seq_len)
 }
 
 // The main game loop
-int game_loop()
+int game_loop(uint8_t *move_sequence)
 {
     char input_buffer[INPUT_LEN];
     int generator_idx = 0;
     int seq_len = STARTING_SEQ_LEN;
     for(;;)
     {
-        generate_sequence(sequence, seq_len, generator_idx);
-        display_sequence(sequence, seq_len);
-        if(handle_input(input_buffer, seq_len))
+        if(seq_len > MAX_SEQ_LEN)
+        {
+            return YOU_WON_CODE;
+        }
+
+        generate_sequence(move_sequence, seq_len, generator_idx);
+        display_sequence(move_sequence, seq_len);
+        if(handle_input(move_sequence, input_buffer, seq_len))
         {
             generator_idx = seq_len;
             seq_len += 1;
@@ -146,7 +173,7 @@ int game_loop()
             sscanf(input_buffer, "%c", &keep_playing);
             if(keep_playing != 'y')
             {
-                return 0;
+                return 1;
             }
             generator_idx = 0;
             seq_len = STARTING_SEQ_LEN;
@@ -156,10 +183,19 @@ int game_loop()
 
 int main(int argc, char **argv)
 {
+    uint8_t move_sequence[MAX_SEQ_LEN / BITS_PER_SEQ_ITEM] = {0};
     setbuf(stdout, NULL);
     srand(time(NULL));
+
     do_opening();
-    game_loop();
-    printf("Thanks for playing!!\n");
+    if(game_loop(move_sequence) == YOU_WON_CODE)
+    {
+        printf("You beat the game!!\n");
+    }
+    else
+    {
+        printf("Thanks for playing!!\n");
+    }
+
     return 0;
 }
